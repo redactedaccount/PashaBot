@@ -1,9 +1,16 @@
 import os
-
 import discord
 from discord.ext import commands
 import sqlite3
 from dotenv import load_dotenv
+from datetime import datetime
+from loguru import logger
+
+# Configure logger
+logger.add("runtime.log", rotation="1 week", level="INFO")
+
+# Get starting time for uptime
+start_time = datetime.now()
 
 # Loading dotenv
 load_dotenv()
@@ -13,67 +20,126 @@ token = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Configuration settings
+movie_channel = 'movie-night'
+
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user.name}')
+    logger.info(f'Logged in as {bot.user.name}')
 
 
-def insert_movie(input_string):
-
-    movie_type, movie_title = input_string.split(": ", 1)
-    conn = sqlite3.connect('pasha.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS movies
-                 (movie_id INTEGER PRIMARY KEY, movie_type TEXT, movie_title TEXT)''')
-    c.execute('INSERT INTO movies (movie_type, movie_title) VALUES (?, ?)', (movie_type, movie_title))
-    conn.commit()
-    conn.close()
-
-
-def list_movies_as_discord_modal():
-    conn = sqlite3.connect('pasha.db')
-    c = conn.cursor()
-    c.execute('SELECT movie_id, movie_type, movie_title FROM movies')
-    movies = c.fetchall()
-    conn.close()
-    modal_content = "```"
-    for movie_id, movie_type, movie_title in movies:
-        modal_content += f"{movie_id}. {movie_type}: {movie_title}\n"
-    modal_content += "```"
-    return modal_content
+def insert_movie(input_string, added_by):
+    try:
+        movie_type, movie_title = input_string.split(": ", 1)
+        added_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS movies
+                     (movie_id INTEGER PRIMARY KEY, movie_type TEXT, movie_title TEXT, added_at DATETIME, added_by TEXT)''')
+        c.execute('INSERT INTO movies (movie_type, movie_title, added_at, added_by) VALUES (?, ?, ?, ?)',
+                  (movie_type, movie_title, added_at, added_by))
+        conn.commit()
+        logger.info(f'Movie "{movie_title}" added by {added_by}')
+    except Exception as e:
+        logger.error(f'Error inserting movie: {e}')
+    finally:
+        conn.close()
 
 
-@bot.command(name='addmovie', help='Adds a movie to the database. Format: !addmovie A: Movie Title')
+def get_movies_list():
+    try:
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+        c.execute('SELECT movie_id, movie_type, movie_title, added_at, added_by FROM movies')
+        movies = c.fetchall()
+        conn.close()
+        movielist_content = "```"
+        for movie_id, movie_type, movie_title, added_at, added_by in movies:
+            movielist_content += f"{movie_id}. {movie_type}: {movie_title} (Added by {added_by} on {added_at})\n"
+        movielist_content += "```"
+        return movielist_content
+    except Exception as e:
+        logger.error(f'Error fetching movies list: {e}')
+        return "Failed to fetch movies list due to an error."
+
+
+@bot.command(name='addmovie', help='Adds a movie to the database. Format: !addmovie A: Movie Title', hidden=True)
 async def add_movie(ctx, *, arg):
-    insert_movie(arg)
-    await ctx.send('Movie added successfully!')
-
-
-@bot.command(name='listmovies', help='Lists all movies in the database.')
-async def list_movies(ctx):
-    modal_content = list_movies_as_discord_modal()
-    await ctx.send(modal_content)
-
-
-@bot.command(name='randommovie', help='Selects a random movie of the given type. Format: !randommovie A')
-async def random_movie(ctx, movie_type: str):
-    if movie_type not in ['A', 'B']:
-        await ctx.send('Please specify a valid movie type: A or B.')
-        return
-
-    conn = sqlite3.connect('pasha.db')
-    c = conn.cursor()
-    c.execute('SELECT movie_title FROM movies WHERE movie_type = ? ORDER BY RANDOM() LIMIT 1', (movie_type,))
-    movie = c.fetchone()
-    conn.close()
-
-    if movie:
-        await ctx.send(f"Random {movie_type} movie: {movie[0]}")
+    if str(ctx.channel) == movie_channel:
+        user = str(ctx.message.author)
+        insert_movie(arg, user)
+        logger.info(f"'addmovie' command called by {user} with argument: {arg}")
+        await ctx.send('Movie added successfully!')
     else:
-        await ctx.send(f"No movies found for type {movie_type}.")
+        logger.info(f"'addmovie' command called outside of movie-night channel by {ctx.message.author}")
 
 
-# API key goes here
+@bot.command(name='listmovies', help='Lists all movies in the database.', hidden=True)
+async def list_movies_cmd(ctx):
+    if str(ctx.channel) == movie_channel:
+        reply_content = get_movies_list()
+        await ctx.send(reply_content)
+    else:
+        logger.info(f"'listmovies' command called outside of movie-night channel by {ctx.message.author}")
+
+
+@bot.command(name='randommovie', help='Selects a random movie of the given type. Format: !randommovie A', hidden=True)
+async def random_movie(ctx, movie_type: str):
+    if str(ctx.channel) == movie_channel:
+        if movie_type not in ['A', 'B']:
+            await ctx.send('Please specify a valid movie type: A or B.')
+            return
+
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+        try:
+            c.execute('SELECT movie_title FROM movies WHERE movie_type = ? ORDER BY RANDOM() LIMIT 1', (movie_type,))
+            movie = c.fetchone()
+            if movie:
+                await ctx.send(f"Random {movie_type} movie: {movie[0]}")
+            else:
+                await ctx.send(f"No movies found for type {movie_type}.")
+        except Exception as e:
+            logger.error(f'Error selecting random movie: {e}')
+            await ctx.send('Failed to select a random movie due to an error.')
+        finally:
+            conn.close()
+    else:
+        logger.info(f"'randommovie' command called outside of movie-night channel by {ctx.message.author}")
+
+
+@bot.command(name='status', help='Gets some status information about the bot and what it is doing.', hidden=True)
+async def print_status(ctx):
+    current_time = datetime.now()
+    uptime = current_time - start_time
+    hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    status_string = f"""
+```
+Movie Channel: {movie_channel}
+Uptime: {hours}h {minutes}m {seconds}s
+Current Channel: {str(ctx.channel)}
+User who called: {str(ctx.message.author)}
+```
+"""
+    await ctx.send(status_string)
+
+
+@bot.command(name='commands', help='See all available commands.')
+async def commands(ctx):
+    embed = discord.Embed(title="Commands", description="List of available commands:", color=0x00ff00)
+    # Adding commands and their descriptions as fields
+    embed.add_field(name="!addmovie [A or B]: [Movie Name]",
+                    value="Adds a movie to the A or B list. A is for active watching, B is for passive watching. \n Example: `!addmovie A: The Matrix`",
+                    inline=False)
+    embed.add_field(name="!listmovies", value="Lists all movies in the database.", inline=False)
+    embed.add_field(name="!randommovie [A or B]", value="Chooses a random movie from the A or B list.", inline=False)
+    embed.add_field(name="!status", value="Basic status information about the bot.", inline=False)
+    # Sending the embed
+    await ctx.send(embed=embed)
+
+
+# Run the bot with the API key
 bot.run(token)
-
