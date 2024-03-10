@@ -22,7 +22,7 @@ async def on_ready():
 def insert_movie(input_string):
 
     movie_type, movie_title = input_string.split(": ", 1)
-    conn = sqlite3.connect('movies.db')
+    conn = sqlite3.connect('pasha.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS movies
                  (movie_id INTEGER PRIMARY KEY, movie_type TEXT, movie_title TEXT)''')
@@ -62,7 +62,7 @@ async def random_movie(ctx, movie_type: str):
         await ctx.send('Please specify a valid movie type: A or B.')
         return
 
-    conn = sqlite3.connect('movies.db')
+    conn = sqlite3.connect('pasha.db')
     c = conn.cursor()
     c.execute('SELECT movie_title FROM movies WHERE movie_type = ? ORDER BY RANDOM() LIMIT 1', (movie_type,))
     movie = c.fetchone()
