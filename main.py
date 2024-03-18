@@ -56,7 +56,10 @@ def get_movies_list():
         conn.close()
         movielist_content = "```"
         for movie_id, movie_type, movie_title, added_at, added_by in movies:
-            movielist_content += f"{movie_id}. {movie_type}: {movie_title} (Added by {added_by} on {added_at})\n"
+            added_at_datetime = datetime.strptime(added_at, "%Y-%m-%d %H:%M:%S")
+            added_at_timestamp = int(added_at_datetime.timestamp())
+
+            movielist_content += f"{movie_id}. {movie_type}: {movie_title} (Added by {added_by} <t:{added_at_timestamp}:R> on <t:{added_at_timestamp}:f>)\n"
         movielist_content += "```"
         return movielist_content
     except Exception as e:
@@ -78,8 +81,38 @@ async def add_movie(ctx, *, arg):
 @bot.command(name='listmovies', help='Lists all movies in the database.', hidden=True)
 async def list_movies_cmd(ctx):
     if str(ctx.channel) == movie_channel:
-        reply_content = get_movies_list()
-        await ctx.send(reply_content)
+        try:
+            conn = sqlite3.connect('pasha.db')
+            c = conn.cursor()
+            c.execute('SELECT movie_id, movie_type, movie_title, added_at, added_by FROM movies ORDER BY movie_type')
+            movies = c.fetchall()
+            conn.close()
+
+            embed = discord.Embed(title="Movie List", description="Movies for movie night:", color=0x00ff00)
+            current_type = ''
+            movie_list_content = ''
+
+            for movie_id, movie_type, movie_title, added_at, added_by in movies:
+                if movie_type != current_type:
+                    if current_type:  # Add the previous type's movies to the embed before starting a new type
+                        embed.add_field(name=f"Type {current_type} Movies", value=movie_list_content, inline=False)
+                        movie_list_content = ''  # Reset the list content for the next type
+                    current_type = movie_type
+
+                added_at_datetime = datetime.strptime(added_at, "%Y-%m-%d %H:%M:%S")
+                added_at_timestamp = int(added_at_datetime.timestamp())
+                movie_info = f"(ID:{movie_id}) {movie_title} (Added by {added_by} <t:{added_at_timestamp}:R> on <t:{added_at_timestamp}:f>)\n"
+                movie_list_content += movie_info
+
+            # Add the last type's movies to the embed
+            if movie_list_content:
+                embed.add_field(name=f"Type {current_type} Movies", value=movie_list_content, inline=False)
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f'Error fetching movies list: {e}')
+            await ctx.send("Failed to fetch movies list due to an error.")
     else:
         logger.info(f"'listmovies' command called outside of movie-night channel by {ctx.message.author}")
 
