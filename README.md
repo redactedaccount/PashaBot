@@ -25,7 +25,7 @@ Type !commands to see a list of commands
 
 `pip install -r requirements.txt`
 
-3. Create a `.env` file in the root directory and add your Discord bot token (Ask Mantisek for the token):
+3. Create a `.env` file in the root directory and add your Discord bot token:
 
 `DISCORD_TOKEN=your_discord_bot_token_here`
 
@@ -54,6 +54,4 @@ After inviting the bot to your Discord server and ensuring it has the necessary 
 
 Contributions are welcome! Feel free to fork the repository and submit pull requests.
 
-## License
 
-This project is open-source and available under the MIT License.
