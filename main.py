@@ -44,8 +44,11 @@ def insert_movie(input_string, added_by):
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS movies
                      (movie_id INTEGER PRIMARY KEY, movie_type TEXT, movie_title TEXT, added_at DATETIME, added_by TEXT)''')
-        c.execute('INSERT INTO movies (movie_type, movie_title, added_at, added_by) VALUES (?, ?, ?, ?)',
-                  (movie_type, movie_title, added_at, added_by))
+
+
+        for char in movie_type:
+            c.execute('INSERT INTO movies (movie_type, movie_title, added_at, added_by) VALUES (?, ?, ?, ?)',
+                      (char, movie_title, added_at, added_by))
         conn.commit()
         logger.info(f'Movie "{movie_title}" added by {added_by}')
     except Exception as e:
@@ -80,8 +83,14 @@ async def add_movie(ctx, *, arg):
         await ctx.send("Used restricted characters. (`'\";). Please remove them and try again.")
         return
 
+    arg_movie_type = arg.split(':')[0]
+    if arg_movie_type not in ['A', 'B', 'AB']:
+        await ctx.send("Not a valid movie type.  Use A, B or AB (for both lists)")
+        return
+
     if str(ctx.channel) == movie_channel:
         user = str(ctx.message.author)
+
         insert_movie(arg, user)
         logger.info(f"'addmovie' command called by {user} with argument: {arg}")
         await ctx.send('Movie added successfully!')
@@ -130,7 +139,8 @@ async def list_movies_cmd(ctx):
 
 
 @bot.command(name='randommovie', help='Selects a random movie of the given type. Format: !randommovie A', hidden=True)
-async def random_movie(ctx, movie_type: str):
+async def random_movie(ctx, movie_type: str = None):
+
     if str(ctx.channel) == movie_channel:
         if movie_type not in ['A', 'B']:
             await ctx.send('Please specify a valid movie type: A or B.')
@@ -139,10 +149,19 @@ async def random_movie(ctx, movie_type: str):
         conn = sqlite3.connect('pasha.db')
         c = conn.cursor()
         try:
-            c.execute('SELECT movie_title FROM movies WHERE movie_type = ? ORDER BY RANDOM() LIMIT 1', (movie_type,))
+            #Setting AB explicitly for now as we don't anticipate adding more movie types.
+            c.execute("""
+            SELECT 
+            movie_title,
+            added_by 
+            FROM movies 
+            WHERE 1=1 
+            AND (movie_type = ? OR movie_type = "AB")
+            ORDER BY RANDOM() LIMIT 1
+            """,(movie_type,))
             movie = c.fetchone()
             if movie:
-                await ctx.send(f"Random {movie_type} movie: {movie[0]}")
+                await ctx.send(f"Random {movie_type} movie: {movie[0]} (Added by {movie[1]})")
             else:
                 await ctx.send(f"No movies found for type {movie_type}.")
         except Exception as e:
@@ -176,8 +195,11 @@ User who called: {str(ctx.message.author)}
 async def commands(ctx):
     embed = discord.Embed(title="Commands", description="List of available commands:", color=0x00ff00)
     # Adding commands and their descriptions as fields
-    embed.add_field(name="!addmovie [A or B]: [Movie Name]",
-                    value="Adds a movie to the A or B list. A is for active watching, B is for passive watching. \n Example: `!addmovie A: The Matrix`",
+    embed.add_field(name="!addmovie [A, B or AB]: [Movie Name]",
+                    value="""
+                    Adds a movie to the A or B list. A is for active watching, B is for passive watching. \n Example: `!addmovie A: The Matrix`
+                    A value of 'AB' will add the movie to both lists for selection.
+                    """,
                     inline=False)
     embed.add_field(name="!listmovies", value="Lists all movies in the database.", inline=False)
     embed.add_field(name="!randommovie [A or B]", value="Chooses a random movie from the A or B list.", inline=False)
