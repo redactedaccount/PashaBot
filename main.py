@@ -15,14 +15,21 @@ start_time = datetime.now()
 # Loading dotenv
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
+movienight_channel = os.getenv('MOVIENIGHT_CHANNEL')
+
+
 
 # Initializing bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration settings
-movie_channel = 'movie-night'
-
+if movienight_channel:
+    movie_channel = movienight_channel
+    logger.info(f'MOVIENIGHT_CHANNEL env variable used. {movie_channel} selected as Movie Night channel.')
+else:
+    movie_channel = 'movie-night'
+    logger.info(f'MOVIENIGHT_CHANNEL env variable blank. {movie_channel} defaulted to as Movie Night channel.')
 
 @bot.event
 async def on_ready():
