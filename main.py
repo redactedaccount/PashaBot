@@ -69,6 +69,10 @@ def get_movies_list():
 
 @bot.command(name='addmovie', help='Adds a movie to the database. Format: !addmovie A: Movie Title', hidden=True)
 async def add_movie(ctx, *, arg):
+    if any(char in arg for char in "`'\";"):
+        await ctx.send("Used restricted characters. (`'\";). Please remove them and try again.")
+        return
+
     if str(ctx.channel) == movie_channel:
         user = str(ctx.message.author)
         insert_movie(arg, user)
@@ -76,6 +80,7 @@ async def add_movie(ctx, *, arg):
         await ctx.send('Movie added successfully!')
     else:
         logger.info(f"'addmovie' command called outside of movie-night channel by {ctx.message.author}")
+
 
 
 @bot.command(name='listmovies', help='Lists all movies in the database.', hidden=True)
