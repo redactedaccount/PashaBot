@@ -40,7 +40,7 @@ The bot will create a SQLite database when the first movie is added.
 After inviting the bot to your Discord server and ensuring it has the necessary permissions, you can use the following commands:
 
 - `!addmovie [A, B or AB]: [Movie Name]`: Adds a movie to the database. 'AB' adds the movie to both lists.
-- `!listmovies`: Lists all movies in the database.
+- `!listmovies [A or B] {Page Number}`: Lists all movies in the database.
 - `!randommovie [A or B]`: Chooses a random movie from the A or B list. Either option will also select 'AB' movies.
 - `!status`: Shows basic status information about the bot.
 - `!commands`: Displays a list of all available commands.

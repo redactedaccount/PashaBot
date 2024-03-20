@@ -98,36 +98,48 @@ async def add_movie(ctx, *, arg):
         logger.info(f"'addmovie' command called outside of movie-night channel by {ctx.message.author}")
 
 
+import discord
+import sqlite3
+from datetime import datetime
+
 
 @bot.command(name='listmovies', help='Lists all movies in the database.', hidden=True)
-async def list_movies_cmd(ctx):
+async def list_movies_cmd(ctx, movie_type: str = None, page_number: int = 1):
+    if not movie_type:
+        await ctx.send('Select either A or B. Can also select a page. Example: !listmovies A 2 (Will show you the second page of movies)')
+        return
     if str(ctx.channel) == movie_channel:
         try:
+            # Determine movie type description
+            type_description = "Active Watching" if movie_type.upper() == "A" else "Passive Watching" if movie_type.upper() == "B" else None
+            if not type_description:
+                await ctx.send(
+                    "Invalid movie type provided. Please use 'A' for Active Watching or 'B' for Passive Watching.")
+                return
+
             conn = sqlite3.connect('pasha.db')
             c = conn.cursor()
-            c.execute('SELECT movie_id, movie_type, movie_title, added_at, added_by FROM movies ORDER BY movie_type')
+            # Calculate offset for pagination
+            offset = (page_number - 1) * 20
+            c.execute(
+                'SELECT movie_id, movie_title, added_at, added_by FROM movies WHERE 1=1 AND (movie_type = ? OR movie_type = "AB") ORDER BY movie_title LIMIT 20 OFFSET ?',
+                (movie_type.upper(), offset))
             movies = c.fetchall()
             conn.close()
 
-            embed = discord.Embed(title="Movie List", description="Movies for movie night:", color=0x00ff00)
-            current_type = ''
-            movie_list_content = ''
+            if not movies:
+                await ctx.send(f"No movies found for type {type_description} on page {page_number}.")
+                return
 
-            for movie_id, movie_type, movie_title, added_at, added_by in movies:
-                if movie_type != current_type:
-                    if current_type:  # Add the previous type's movies to the embed before starting a new type
-                        embed.add_field(name=f"Type {current_type} Movies", value=movie_list_content, inline=False)
-                        movie_list_content = ''  # Reset the list content for the next type
-                    current_type = movie_type
+            embed = discord.Embed(title=f"Movie List - {type_description}",
+                                  description=f"Movies for movie night (Page {page_number}):", color=0x00ff00)
 
+            for movie_id, movie_title, added_at, added_by in movies:
                 added_at_datetime = datetime.strptime(added_at, "%Y-%m-%d %H:%M:%S")
                 added_at_timestamp = int(added_at_datetime.timestamp())
-                movie_info = f"(ID:{movie_id}) {movie_title} (Added by {added_by} <t:{added_at_timestamp}:R> on <t:{added_at_timestamp}:f>)\n"
-                movie_list_content += movie_info
+                movie_info = f"(ID:{movie_id}) (Added by {added_by} <t:{added_at_timestamp}:R> on <t:{added_at_timestamp}:f>)"
 
-            # Add the last type's movies to the embed
-            if movie_list_content:
-                embed.add_field(name=f"Type {current_type} Movies", value=movie_list_content, inline=False)
+                embed.add_field(name=movie_title, value=movie_info, inline=False)
 
             await ctx.send(embed=embed)
 
@@ -175,20 +187,38 @@ async def random_movie(ctx, movie_type: str = None):
 
 @bot.command(name='status', help='Gets some status information about the bot and what it is doing.', hidden=True)
 async def print_status(ctx):
+    try:
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+        # Fetch counts for each category including AB counted in both A and B
+        c.execute('''SELECT movie_type, COUNT(*) FROM movies WHERE movie_type IN ('A', 'AB')''')
+        count_a = sum([count for type, count in c.fetchall() if type in ['A', 'AB']])
+        c.execute('''SELECT movie_type, COUNT(*) FROM movies WHERE movie_type IN ('B', 'AB')''')
+        count_b = sum([count for type, count in c.fetchall() if type in ['B', 'AB']])
+
+        pages_a = (count_a + 19) // 20  # +19 for ceiling effect
+        pages_b = (count_b + 19) // 20  # +19 for ceiling effect
+
+        conn.close()
+    except Exception as e:
+        logger.error(f'Error fetching movie counts: {e}')
+        count_a = count_b = pages_a = pages_b = 0
+
     current_time = datetime.now()
     uptime = current_time - start_time
     hours, remainder = divmod(int(uptime.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
 
-    status_string = f"""
-```
-Movie Channel: {movie_channel}
-Uptime: {hours}h {minutes}m {seconds}s
-Current Channel: {str(ctx.channel)}
-User who called: {str(ctx.message.author)}
-```
-"""
-    await ctx.send(status_string)
+    embed = discord.Embed(title="Pasha Status", description="Current status and statistics:", color=0x00ff00)
+    embed.add_field(name="Movie Channel", value=movie_channel, inline=False)
+    embed.add_field(name="Uptime", value=f"{hours}h {minutes}m {seconds}s", inline=False)
+    embed.add_field(name="Current Channel", value=str(ctx.channel), inline=False)
+    embed.add_field(name="User who called", value=str(ctx.message.author), inline=False)
+    embed.add_field(name="A-Type Movies", value=f"{count_a} movies ({pages_a} pages)", inline=False)
+    embed.add_field(name="B-Type Movies", value=f"{count_b} movies ({pages_b} pages)", inline=False)
+
+
+    await ctx.send(embed=embed)
 
 
 @bot.command(name='commands', help='See all available commands.')
@@ -201,7 +231,7 @@ async def commands(ctx):
                     A value of 'AB' will add the movie to both lists for selection.
                     """,
                     inline=False)
-    embed.add_field(name="!listmovies", value="Lists all movies in the database.", inline=False)
+    embed.add_field(name="!listmovies", value="Lists all movies by type. Paginated. Defaults to page 1 without a page number. Ex. !listmovies A 2", inline=False)
     embed.add_field(name="!randommovie [A or B]", value="Chooses a random movie from the A or B list.", inline=False)
     embed.add_field(name="!status", value="Basic status information about the bot.", inline=False)
     # Sending the embed
