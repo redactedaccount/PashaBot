@@ -17,8 +17,6 @@ load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 movienight_channel = os.getenv('MOVIENIGHT_CHANNEL')
 
-
-
 # Initializing bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -35,6 +33,15 @@ else:
 async def on_ready():
     logger.info(f'Logged in as {bot.user.name}')
 
+    #Initialize database
+    conn = sqlite3.connect('pasha.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS movies
+                 (movie_id INTEGER PRIMARY KEY, movie_type TEXT, movie_title TEXT, added_at DATETIME, added_by TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS archived_movies
+    (movie_id INTEGER PRIMARY KEY, archived_datetime DATETIME, archived_by TEXT)
+    ''')
+    conn.commit()
 
 def insert_movie(input_string, added_by):
     try:
@@ -56,12 +63,51 @@ def insert_movie(input_string, added_by):
     finally:
         conn.close()
 
+def add_movie_to_archive(movie_id, archived_by):
+    try:
+        archived_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS archived_movies
+        (movie_id INTEGER PRIMARY KEY, archived_datetime DATETIME, archived_by TEXT)
+        ''')
+
+        c.execute('''
+        SELECT
+        movies.movie_title
+        FROM
+        movies
+        LEFT JOIN archived_movies am ON movies.movie_id = am.movie_id 
+        WHERE am.movie_id IS NULL
+        AND movies.movie_id = ?
+        ''', (movie_id,))
+
+        check = c.fetchone()
+        if check is None:
+            logger.info(f'Attempted to archive movie with id {movie_id} that does not exist or is already archived.')
+            return False
+        else:
+            c.execute('INSERT INTO archived_movies (movie_id, archived_datetime, archived_by) VALUES (?, ?, ?)',
+                      (movie_id, archived_datetime, archived_by))
+            conn.commit()
+            logger.info(f'Movie with the ID of {movie_id} archived by {archived_by}')
+
+            # Returns the movie title, since movie_title would be the first and only column for the check variable.
+            return check[0]
+
+    except Exception as e:
+        logger.error(f'Error archiving movie id {movie_id}: {e}')
 
 def get_movies_list():
     try:
         conn = sqlite3.connect('pasha.db')
         c = conn.cursor()
-        c.execute('SELECT movie_id, movie_type, movie_title, added_at, added_by FROM movies')
+
+        # Get all movies that don't show up in the archived list as well.
+        c.execute('''SELECT movie_id, movie_type, movie_title, added_at, added_by 
+        FROM movies 
+        LEFT JOIN archived_movies am ON movies.movie_id = am.movie_id 
+        WHERE am.movie_id IS NULL;''')
         movies = c.fetchall()
         conn.close()
         movielist_content = "```"
@@ -75,6 +121,33 @@ def get_movies_list():
     except Exception as e:
         logger.error(f'Error fetching movies list: {e}')
         return "Failed to fetch movies list due to an error."
+
+def get_archived_movies():
+    try:
+        conn = sqlite3.connect('pasha.db')
+        c = conn.cursor()
+
+        # Get all movies that are archived, taking data from the movies table.
+        c.execute('''
+        SELECT 
+        m.movie_id,
+        m.movie_type,
+        m.movie_title,
+        m.added_at,
+        m.added_by,
+        a.archived_by,
+        a.archived_datetime
+        FROM movies m
+        JOIN archived_movies a
+        ON m.movie_id = a.movie_id
+        ''')
+        movies = c.fetchall()
+        c.close()
+        return movies
+
+    except Exception as e:
+        logger.error(f'Error fetching archived movies list: {e}')
+        return 'ERROR'
 
 
 @bot.command(name='addmovie', help='Adds a movie to the database. Format: !addmovie A: Movie Title', hidden=True)
@@ -97,12 +170,6 @@ async def add_movie(ctx, *, arg):
     else:
         logger.info(f"'addmovie' command called outside of movie-night channel by {ctx.message.author}")
 
-
-import discord
-import sqlite3
-from datetime import datetime
-
-
 @bot.command(name='listmovies', help='Lists all movies in the database.', hidden=True)
 async def list_movies_cmd(ctx, movie_type: str = None, page_number: int = 1):
     if not movie_type:
@@ -122,7 +189,20 @@ async def list_movies_cmd(ctx, movie_type: str = None, page_number: int = 1):
             # Calculate offset for pagination
             offset = (page_number - 1) * 20
             c.execute(
-                'SELECT movie_id, movie_title, added_at, added_by FROM movies WHERE 1=1 AND (movie_type = ? OR movie_type = "AB") ORDER BY movie_title LIMIT 20 OFFSET ?',
+                """
+                SELECT
+                movies.movie_id,
+                movies.movie_title,
+                movies.added_at,
+                movies.added_by
+                FROM movies
+                LEFT JOIN archived_movies am
+                ON movies.movie_id = am.movie_id
+                WHERE 1=1
+                  AND am.movie_id IS NULL
+                  AND (movies.movie_type = ? OR movies.movie_type = 'AB')
+                ORDER BY movies.movie_title
+                LIMIT 20 OFFSET ?""",
                 (movie_type.upper(), offset))
             movies = c.fetchall()
             conn.close()
@@ -149,6 +229,52 @@ async def list_movies_cmd(ctx, movie_type: str = None, page_number: int = 1):
     else:
         logger.info(f"'listmovies' command called outside of movie-night channel by {ctx.message.author}")
 
+@bot.command(name='listarchived', help='Lists all archived movies', hidden=True)
+async def archived_movies(ctx):
+    ''' Gets a list of all archived movies. This should be refactored to be cleaner.'''
+
+    if str(ctx.channel) == movie_channel:
+        try:
+            movies = get_archived_movies()
+
+            if movies == 'ERROR':
+                await ctx.send("Failed to fetch archived movies list due to an error.")
+                return
+
+            # Constructing the embed
+            embed = discord.Embed(title=f"Archived Movie List",
+                                  description=f"Archived movies (Pagination not implemented yet):", color=0x00ff00)
+
+            for movie_id, movie_type, movie_title, added_at, added_by, archived_by, archived_datetime in movies:
+                added_at_datetime = datetime.strptime(added_at, "%Y-%m-%d %H:%M:%S")
+                archived_datetime = datetime.strptime(archived_datetime, "%Y-%m-%d %H:%M:%S")
+
+                # Discord datetime formatting expects an int
+                added_at_timestamp = int(added_at_datetime.timestamp())
+                archived_timestamp = int(archived_datetime.timestamp())
+
+                movie_info = f"""
+                (ID:{movie_id} {movie_title}) (Added by {added_by} <t:{added_at_timestamp}:R> on <t:{added_at_timestamp}:f> as a type {movie_type} movie. Archived <t:{archived_timestamp}:R> on <t:{archived_timestamp}:f>)
+                """
+                embed.add_field(name=movie_title, value=movie_info, inline=False)
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f'Error fetching archived movies list: {e}')
+            await ctx.send("Failed to fetch archived movies list due to an error")
+
+        except Exception as e:
+            logger.error(f'Error fetching archived movies list: {e}')
+            await ctx.send("Failed to fetch archived movies list due to an error")
+
+@bot.command(name='archivemovie', help='Archives movie by ID. Usage: !archivemovie 12', hidden=True)
+async def archive_movie(ctx, movie_id: int):
+    result = add_movie_to_archive(movie_id, str(ctx.message.author))
+    if result == None:
+        await ctx.send('No movie by this ID')
+    else:
+        await ctx.send(f'(ID:{movie_id}){result} archived.')
 
 @bot.command(name='randommovie', help='Selects a random movie of the given type. Format: !randommovie A', hidden=True)
 async def random_movie(ctx, movie_type: str = None):
@@ -167,8 +293,11 @@ async def random_movie(ctx, movie_type: str = None):
             movie_title,
             added_by 
             FROM movies 
-            WHERE 1=1 
-            AND (movie_type = ? OR movie_type = "AB")
+            LEFT JOIN archived_movies am 
+                ON movies.movie_id = am.movie_id 
+                WHERE 1=1
+                AND am.movie_id IS NULL 
+                AND (movie_type = ? OR movie_type = "AB") 
             ORDER BY RANDOM() LIMIT 1
             """,(movie_type,))
             movie = c.fetchone()
@@ -217,7 +346,6 @@ async def print_status(ctx):
     embed.add_field(name="A-Type Movies", value=f"{count_a} movies ({pages_a} pages)", inline=False)
     embed.add_field(name="B-Type Movies", value=f"{count_b} movies ({pages_b} pages)", inline=False)
 
-
     await ctx.send(embed=embed)
 
 
@@ -231,6 +359,8 @@ async def commands(ctx):
                     A value of 'AB' will add the movie to both lists for selection.
                     """,
                     inline=False)
+    embed.add_field(name="!archivemovie [ID]", value="Puts a movie in the archive by its ID", inline=False)
+    embed.add_field(name="!list_archive", value="Shows all archived movies.", inline=False)
     embed.add_field(name="!listmovies", value="Lists all movies by type. Paginated. Defaults to page 1 without a page number. Ex. !listmovies A 2", inline=False)
     embed.add_field(name="!randommovie [A or B]", value="Chooses a random movie from the A or B list.", inline=False)
     embed.add_field(name="!status", value="Basic status information about the bot.", inline=False)
